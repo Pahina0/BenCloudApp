@@ -143,3 +143,46 @@ export const submitExposureTask = (exposureTaskJSON, store) => {
   };
   return { fetch };
 }
+
+// Synchronous exposure analysis (single request returns results)
+export const submitExposureSyncAnalysis = (exposureTaskConfig, store, opts = {}) => {
+  const data = ref(null);
+  const error = ref(null);
+  const loading = ref(false);
+  const response = ref(false);
+
+  const fetch = async () => {
+    loading.value = true;
+    try {
+      const params = {
+        page: opts.page ?? 1,
+        rowsPerPage: opts.rowsPerPage ?? 50,
+      };
+      if (opts.gridId != null) params.gridId = opts.gridId;
+      if (opts.efId != null) params.efId = opts.efId;
+
+      const result = await axios.post(
+        process.env.API_SERVER + "/api/analysis/exposure",
+        exposureTaskConfig,
+        {
+          params,
+          validateStatus: function (status) {
+            return status < 500;
+          },
+        }
+      );
+
+      data.value = result.data;
+      response.value = result;
+      return { response, error, data, loading };
+    } catch (ex) {
+      error.value = ex;
+      return { response, error, data, loading };
+    } finally {
+      loading.value = false;
+      return { response, error, data, loading };
+    }
+  };
+
+  return { fetch };
+};

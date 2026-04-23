@@ -62,7 +62,7 @@
         <q-btn
           :disabled="taskName.trim() == ''"
           color="primary"
-          label="Submit Task"
+          label="Check Result"
           @click="submitTask()"
         />
       </div>
@@ -107,8 +107,8 @@ import { useStore } from "vuex";
 import { useQuasar } from "quasar";
 
 import { createExposureTemplate, saveTemplate } from "../../composables/templates/templates";
-import { buildExposureBatchTask, submitExposureTask } from "../../composables/exposure/exposure-task";
-import TaskSubmittedDialog from "./TaskSubmittedDialog.vue";
+import { buildExposureBatchTask, submitExposureSyncAnalysis } from "../../composables/exposure/exposure-task";
+// Results are shown on a dedicated page after sync run
 
 export default defineComponent({
   model: ref(null),
@@ -174,41 +174,72 @@ export default defineComponent({
     }
 
 
-    function submitTask() {
+    async function submitTask() {
+      // "Check Result": run sync exposure analysis and show results immediately.
+      // Current sync endpoint supports ONE scenario + ONE population year.
+      const scenarios = store.state.exposure.postPolicyAirQualityId || [];
+      const scenarioNames = store.state.exposure.postPolicyAirQualityName || [];
 
-      var batchTaskJSON = JSON.parse(JSON.stringify(store.state.exposure.batchTaskObject));
-      batchTaskJSON['name'] = taskName.value;
-      store.commit("analysis/updateBatchTaskObject", batchTaskJSON);
-      console.log("----- Batch task configuration -----")
-      console.log(batchTaskJSON);
+      if (!scenarios.length || !scenarioNames.length) {
+        alert("Please select a post-policy air quality surface and year(s) first.");
+        return;
+      }
 
-      (async () => {
-        const response = await submitExposureTask(batchTaskJSON, store).fetch();
-        if(response.data.value.message=="Task was submitted"){
-          $q.dialog({
-              component: TaskSubmittedDialog,
-              parent: this,
-              persistent: true,
-              componentProps: {
-                taskName: taskName,
-              },
-            })
-            .onOk(() => {
-              //taskName.value = ""
-              this.$router.replace("/datacenter/manage-tasks");
-            })
-            .onCancel(() => {
-              // Sounds backwards, but clicking on the 'OK' button is actually a Cancel since we don't
-              // want the user to go anywhere (we're cancelling out of the dialog)
-              // Clear the task name field
-              taskName.value = "";
-            });
-          }
-          else{
-            //Usually when reached the maximum of # task scenarios allowed per user.
-            alert(response.data.value.message);
-          }
-      })();       
+      const aqScenarioId = scenarios[0];
+      const years = scenarioNames[0]?.years || [];
+      const popYear = years[0];
+
+      let warning = "";
+      if (scenarios.length > 1 || scenarioNames.some((s) => (s?.years || []).length > 1)) {
+        warning =
+          "Multiple scenarios/years selected. Sync 'Check Result' is running only the first scenario and first year.";
+      }
+
+      // Flatten exposure functions from the batch config we already build via /batch-task-config
+      const batch = store.state.exposure.batchTaskObject;
+      const exposureGroups = batch?.batchExposureGroups || [];
+      const exposureFunctions = [];
+      exposureGroups.forEach((g) => {
+        (g.exposureConfigs || []).forEach((c) => {
+          exposureFunctions.push({
+            efId: c.efId ?? c.ef_id ?? c.id,
+            efInstanceId: c.efInstanceId ?? c.ef_instance_id ?? c.efInstance ?? c.efInstanceID ?? c.ef_instanceId ?? c.efInstanceId,
+          });
+        });
+      });
+
+      // Fallback: if batch config isn't present, we can't know which functions were selected
+      if (!exposureFunctions.length) {
+        alert("Exposure functions not loaded yet. Please go back and reselect function group, then try again.");
+        return;
+      }
+
+      const exposureTaskConfig = {
+        name: taskName.value || "Exposure analysis",
+        aqBaselineId: store.state.exposure.prePolicyAirQualityId,
+        aqScenarioId,
+        popId: store.state.exposure.populationDatasetId,
+        popYear,
+        exposureFunctions,
+      };
+
+      const res = await submitExposureSyncAnalysis(exposureTaskConfig, store, { page: 1, rowsPerPage: 50 }).fetch();
+      const payload = res?.data?.value || res?.data || {};
+
+      if (!payload || payload.message) {
+        alert(payload?.message || "Unable to run sync exposure analysis.");
+        return;
+      }
+
+      // Navigate to results page with the same style as DataCenter ViewTaskResults
+      this.$router.push({
+        path: `/exposure/view-result/${payload.resultDatasetId}`,
+        query: {
+          taskUuid: payload.taskUuid,
+          elapsedMs: String(payload.elapsedMs ?? ""),
+          warning,
+        },
+      });
     }
 
     onBeforeMount(() => {
