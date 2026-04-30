@@ -301,6 +301,7 @@ setup(props, context) {
   const task_uuid = ref(0)
 
   let completedTasksRefreshTimeout = null;
+  const onTasksUpdated = () => loadCompletedTasks();
 
   function loadCompletedTasks() {
     // console.log("loadCompletedTasks()")
@@ -532,11 +533,13 @@ setup(props, context) {
 
   onMounted(() => {
     loadCompletedTasks()
+    window.addEventListener("bencloud:tasks-updated", onTasksUpdated);
   });
 
   onBeforeUnmount(() => {
     //console.log("before unmount")
     disableAutoRefresh()
+    window.removeEventListener("bencloud:tasks-updated", onTasksUpdated);
   })
 
   return {

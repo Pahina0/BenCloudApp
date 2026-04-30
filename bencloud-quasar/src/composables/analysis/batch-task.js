@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import axios from "axios";
 import { populationDatasetName } from "src/store/analysis/getters";
+import { taskNotifications } from "src/composables/tasks/task-notifications";
 
 export const buildBatchTaskJSON = (taskName, store) => {
 
@@ -108,6 +109,11 @@ export const submitBatchTask = (batchTaskJSON, store) => {
       .then((response) => {
         console.log(response)
         data.value = response.data;
+        // Subscribe to websocket updates immediately so user can stay on current page
+        const batchTaskId = response?.data?.batchTaskId;
+        if (batchTaskId != null) {
+          taskNotifications.subscribe(batchTaskId);
+        }
         //console.log(data.value);
         //return data.value;
         return { response, error, data, loading };

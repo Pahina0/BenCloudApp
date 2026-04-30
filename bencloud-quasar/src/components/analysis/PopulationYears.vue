@@ -76,6 +76,13 @@ export default defineComponent({
           years.push({ label: val, value: val });
         }
         rows.value = years;
+
+        // If the available years list changes (e.g. switching population datasets),
+        // drop any previously-selected years that are no longer valid (prevents "stuck" chips).
+        const allowed = new Set(years.map(y => y.value));
+        scenarios.value.forEach((scenario) => {
+          scenario.years = (scenario.years || []).filter(y => allowed.has(y));
+        });
       }
     );
 

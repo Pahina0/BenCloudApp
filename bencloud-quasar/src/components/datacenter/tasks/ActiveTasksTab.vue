@@ -142,11 +142,14 @@ import { defineComponent } from "vue";
 import { ref, unref, onMounted, onBeforeMount, onBeforeUnmount, watch, watchEffect } from "vue";
 import axios from "axios";
 import { useStore } from "vuex";
+import { useQuasar } from "quasar";
+import { useRouter } from "vue-router";
 
 import { getActiveTasks } from "../../../composables/tasks/active-tasks";
 import ActiveTaskStatus from "./ActiveTaskStatus.vue";
 import { showAllTasks } from "../tasks/ManageTasksTabs.vue";
 import { convertToUserTimezone } from "src/composables/common/time";
+import { taskNotifications } from "src/composables/tasks/task-notifications";
 
 export default defineComponent({
   model: ref(null),
@@ -164,6 +167,8 @@ export default defineComponent({
 
   setup(props, context) {
     const store = useStore();
+    const $q = useQuasar();
+    const router = useRouter();
 
     const rows = ref([]);
     const filter = ref("");
@@ -180,6 +185,21 @@ export default defineComponent({
 
     let myFilter = unref(filter);
     let activeTasksRefreshTimeout = null;
+    let unsubWsComplete = null;
+    const completedNotified = new Set();
+
+    function subscribeToVisibleBatchTasks() {
+      try {
+        // rows represent batch tasks in this table
+        rows.value.forEach((r) => {
+          if (r?.batch_task_id != null) {
+            taskNotifications.subscribe(r.batch_task_id);
+          }
+        });
+      } catch (e) {
+        // ignore
+      }
+    }
 
     watch(
       () => showAllTasks.value,
@@ -209,6 +229,9 @@ export default defineComponent({
 
         loading.value = false;
 
+        // Subscribe to batch task updates via websocket
+        subscribeToVisibleBatchTasks();
+
         enableAutoRefresh();
       })();
 
@@ -227,12 +250,49 @@ export default defineComponent({
 
     onMounted(() => {
       console.log(props.autoRefresh)
+      // Refresh lists immediately when a batch task completes
+      unsubWsComplete = taskNotifications.on("ws:batchTaskComplete", async (evt) => {
+        const msg = evt?.detail || {};
+        const batchTaskId = msg.batchTaskId;
+
+        loadActiveTasks();
+        window.dispatchEvent(new Event("bencloud:tasks-updated"));
+
+        if (!batchTaskId) return;
+
+        // Avoid spamming dialogs if multiple events arrive
+        if (completedNotified.has(String(batchTaskId))) return;
+        completedNotified.add(String(batchTaskId));
+
+        let taskUuid = null;
+        try {
+          const res = await axios.get(`${process.env.API_SERVER}/api/batch-tasks/${batchTaskId}/scenarios`);
+          const tasks = res?.data?.tasks || [];
+          // Prefer HIF task if present; otherwise fall back to first task
+          const hif = tasks.find(t => t.task_type === "HIF") || tasks[0];
+          taskUuid = hif?.task_uuid || null;
+        } catch (e) {
+          // ignore; allow dialog without deep-link
+        }
+
+        $q.dialog({
+          title: "Task completed",
+          message: msg?.message ? String(msg.message) : `Batch task ${batchTaskId} completed.`,
+          ok: { label: taskUuid ? "View results" : "OK", color: "primary" },
+          cancel: taskUuid ? { label: "Close", flat: true } : false,
+        }).onOk(() => {
+          if (taskUuid) {
+            router.push({ path: `/datacenter/view-export-task/${batchTaskId}-${taskUuid}` });
+          }
+        });
+      });
       loadActiveTasks();
     });
 
     onBeforeUnmount(() => {
       //console.log("before unmount")
       disableAutoRefresh()
+      if (unsubWsComplete) unsubWsComplete();
       //clearInterval(activeTasksRefreshInterval);
     })
 
